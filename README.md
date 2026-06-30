@@ -16,10 +16,13 @@ Three problems, one tool:
 - **OLED burn-in.** A wallpaper that never changes slowly ghosts itself into the
   panel. Zenwall keeps the canvas near-black, reshuffles the whole mosaic on
   every re-roll, and can export a *rotation pack* so your desktop is never static.
-- **The chunk logic.** Each image picks a tile size weighted by its orientation
-  (portrait / landscape / square), then takes the grid slot next to the most
-  already-placed neighbours, so the mosaic grows in tight clusters instead of
-  scattering. It's the part that makes the output look composed rather than random.
+- **Composed, not random.** Two things keep it from looking like a contact
+  sheet: each image picks a tile size weighted by its orientation (portrait /
+  landscape / square) and takes the grid slot next to the most already-placed
+  neighbours, so the mosaic grows in clusters; and the pool is ordered by color
+  (a hue-banded sort) so similar colors sit together and the wallpaper reads as
+  color fields. A per-render hue rotation keeps re-rolls and rotation-pack frames
+  distinct.
 - **A nice wallpaper source for designers.** are.na is where a lot of designers
   already keep their reference. Paste a channel and your moodboard becomes your
   desktop.
@@ -35,9 +38,10 @@ Open the app, choose a source, export a PNG.
 - **are.na:** paste a public channel URL or slug. Fetched client-side via the
   are.na API.
 
-Controls: tile density, gap, resolution presets (including ultrawide / 5120×1440),
-near-black vs true-black canvas, re-roll, single-PNG export, and the rotation
-pack (writes N shuffled variants to a folder you pick).
+Controls: arrangement (composed by color, or shuffle), tile density, gap,
+resolution presets (including ultrawide / 5120×1440), canvas (true-black by
+default, for OLED), re-roll, single-PNG export, and the rotation pack (writes N
+palette-rotated variants to a folder you pick, each distinct from the last).
 
 It's a static site. Host it anywhere, or just open `index.html`.
 
@@ -53,8 +57,11 @@ sets the live wallpaper, and (optionally) regenerates hourly via Task Scheduler.
 installer. Same algorithm in both places:
 
 1. Build a grid (`cols` × derived `rows`, cells roughly square).
-2. Shuffle the image pool with a seeded RNG, so a layout is reproducible: same
-   seed, same arrangement. That's what re-roll and the rotation pack ride on.
+2. Order the pool. By default ([`color.js`](color.js)) each image is sorted by a
+   hue-banded "step sort" (grays grouped separately), so similar colors sit
+   together and the result reads as color fields. A seed-derived hue rotation
+   varies which color leads, so re-rolls and pack frames stay distinct. Shuffle
+   mode falls back to a seeded random order.
 3. For each image: pick a chunk size from its orientation profile, find the
    highest-scoring free slot (most occupied neighbours, biased top-left), fall
    back to smaller chunks if it won't fit, then draw it `object-fit: cover`,

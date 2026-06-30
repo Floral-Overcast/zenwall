@@ -39,16 +39,19 @@
     return { w: parseInt(p[0], 10), h: parseInt(p[1], 10) };
   }
 
-  function opts(seed) {
+  function opts(seed, extra) {
     var size = targetSize();
-    return {
+    var o = {
       width: size.w,
       height: size.h,
       cols: parseInt($('cols').value, 10),
       gap: parseInt($('gap').value, 10),
       bg: $('bg').value,
+      arrange: $('arrange') ? $('arrange').value : 'color',
       seed: seed
     };
+    if (extra) for (var k in extra) o[k] = extra[k];
+    return o;
   }
 
   // ── Render ──
@@ -101,7 +104,11 @@
     return Promise.all(sources.map(function (src) {
       return loadImage(src, useCors).then(function (img) {
         done++;
-        if (img && img.naturalWidth) loaded.push(img);
+        if (img && img.naturalWidth) {
+          // Color signature, computed once, used for composed (color) ordering.
+          if (window.Palette) img._col = window.Palette.analyze(img);
+          loaded.push(img);
+        }
         $('busy-text').textContent = 'Loading images… ' + done + '/' + sources.length;
       });
     })).then(function () {
@@ -179,13 +186,34 @@
     }, 'image/png');
   }
 
-  // ── Export: rotation pack (N shuffled variants) ──
+  // ── Export: rotation pack (N distinct variants) ──
   var PACK_COUNT = 12;
+  var PACK_MIN_DISTANCE = 14;  // min mean per-channel diff between consecutive frames
 
   function canvasToBlob() {
     return new Promise(function (resolve) {
       canvas.toBlob(function (b) { resolve(b); }, 'image/png');
     });
+  }
+
+  // Render one pack frame: rotate the palette so it differs from its neighbours,
+  // and (in color mode) re-roll if it's still too close to the previous frame —
+  // so the OLED gets something genuinely distinct on every flip.
+  function renderPackFrame(i, count, prevSig) {
+    var hueShift = (i / count) % 1;
+    var sig = null;
+    var attempts = 0;
+    do {
+      var seed = (Math.random() * 0xffffffff) >>> 0;
+      Zenwall.render(canvas, state.images, opts(seed, { hueShift: hueShift }));
+      sig = window.Palette ? window.Palette.canvasSignature(canvas, 8) : null;
+      attempts++;
+    } while (
+      prevSig && sig &&
+      window.Palette.signatureDistance(prevSig, sig) < PACK_MIN_DISTANCE &&
+      attempts < 5
+    );
+    return sig;
   }
 
   function exportPack() {
@@ -201,6 +229,7 @@
   function packToFolder(statusEl) {
     window.showDirectoryPicker({ mode: 'readwrite' }).then(function (dir) {
       var i = 0;
+      var prevSig = null;
       function step() {
         if (i >= PACK_COUNT) {
           statusEl.textContent = 'Wrote ' + PACK_COUNT + ' wallpapers. Point your OS slideshow here.';
@@ -209,8 +238,7 @@
         }
         i++;
         statusEl.textContent = 'Rendering ' + i + '/' + PACK_COUNT + '…';
-        var seed = (Math.random() * 0xffffffff) >>> 0;
-        Zenwall.render(canvas, state.images, opts(seed));
+        prevSig = renderPackFrame(i - 1, PACK_COUNT, prevSig);
         canvasToBlob().then(function (blob) {
           return dir.getFileHandle('zenwall-' + String(i).padStart(2, '0') + '.png', { create: true })
             .then(function (fh) { return fh.createWritable(); })
@@ -227,6 +255,7 @@
   // Firefox/Safari: fall back to sequential downloads.
   function packAsDownloads(statusEl) {
     var i = 0;
+    var prevSig = null;
     function step() {
       if (i >= PACK_COUNT) {
         statusEl.textContent = 'Saved ' + PACK_COUNT + ' wallpapers to your downloads.';
@@ -235,8 +264,7 @@
       }
       i++;
       statusEl.textContent = 'Saving ' + i + '/' + PACK_COUNT + '…';
-      var seed = (Math.random() * 0xffffffff) >>> 0;
-      Zenwall.render(canvas, state.images, opts(seed));
+      prevSig = renderPackFrame(i - 1, PACK_COUNT, prevSig);
       canvasToBlob().then(function (blob) {
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
@@ -304,6 +332,7 @@
       render();
     });
     $('bg').addEventListener('change', render);
+    $('arrange').addEventListener('change', render);
     $('res').addEventListener('change', function () {
       $('custom-res').classList.toggle('is-hidden', $('res').value !== 'custom');
       render();

@@ -66,6 +66,14 @@
           </label>
 
           <label class="control">
+            <span class="control-label">Arrangement</span>
+            <select id="arrange" class="select">
+              <option value="color">Composed (by color)</option>
+              <option value="shuffle">Shuffle (random)</option>
+            </select>
+          </label>
+
+          <label class="control">
             <span class="control-label">Resolution</span>
             <select id="res" class="select">
               <option value="screen">Fit my screen</option>
@@ -92,8 +100,8 @@
           <label class="control">
             <span class="control-label">Canvas</span>
             <select id="bg" class="select">
-              <option value="#000000">True black (best for OLED)</option>
-              <option value="#0f0f14" selected>Near-black (the original)</option>
+              <option value="#000000" selected>True black (best for OLED)</option>
+              <option value="#0f0f14">Near-black</option>
               <option value="#14141a">Charcoal</option>
             </select>
           </label>
@@ -150,6 +158,7 @@
     <button class="btn btn-primary" id="oled-close">Got it</button>
   </dialog>
 
+  <script src="color.js"></script>
   <script src="engine.js"></script>
   <script src="arena.js"></script>
   <script src="app.js"></script>

@@ -48,8 +48,9 @@
   }
 
   // Score every legal slot by neighbour count (favours clustering), nudged
-  // toward the top-left, then pick randomly from the best five for variety.
-  function findBestPosition(grid, cw, ch, rows, cols, rnd) {
+  // toward the top-left, then pick randomly from the best `topK` for variety.
+  // In composed (color) mode topK is small so the sorted pool flows cleanly.
+  function findBestPosition(grid, cw, ch, rows, cols, rnd, topK) {
     const positions = [];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -65,7 +66,7 @@
     }
     if (!positions.length) return null;
     positions.sort((a, b) => b[0] - a[0]);
-    const top = positions.slice(0, 5);
+    const top = positions.slice(0, Math.max(1, topK || 5));
     const pick = top[Math.floor(rnd() * top.length)];
     return [pick[1], pick[2]];
   }
@@ -110,9 +111,12 @@
 
   /*
    * render(canvas, images, opts)
-   *   images : array of loaded <img> (or {img, naturalWidth, naturalHeight})
-   *   opts   : { width, height, cols, gap, bg, seed }
+   *   images : array of loaded <img> (or {img, naturalWidth, naturalHeight}),
+   *            each optionally carrying a `_col` color signature (see Palette).
+   *   opts   : { width, height, cols, gap, bg, seed, arrange, hueShift }
    *            cols sets density; rows is derived for ~square cells.
+   *            arrange: 'color' (default, composed) | 'shuffle' (random).
+   *            hueShift: 0..1, rotates the color spectrum (defaults to seed-derived).
    * returns  : { rows, cols, placed, seed }
    */
   function render(canvas, images, opts) {
@@ -120,8 +124,12 @@
     const height = opts.height;
     const cols = Math.max(2, opts.cols | 0);
     const gap = opts.gap == null ? 6 : opts.gap;
-    const bg = opts.bg || '#0f0f14';
+    const bg = opts.bg || '#000000';
     const seed = (opts.seed == null ? Date.now() : opts.seed) >>> 0;
+    const arrange = opts.arrange || 'color';
+    // Default hue rotation is derived from the seed, so each re-roll rotates the
+    // palette (a different color leads) while staying composed.
+    const hueShift = opts.hueShift == null ? ((seed % 997) / 997) : opts.hueShift;
 
     const rows = Math.max(1, Math.round(cols * (height / width)));
 
@@ -141,11 +149,22 @@
 
     const rnd = mulberry32(seed);
 
-    // Seeded Fisher–Yates shuffle so the pool order is reproducible too.
-    const imgs = images.slice();
-    for (let i = imgs.length - 1; i > 0; i--) {
-      const j = Math.floor(rnd() * (i + 1));
-      const t = imgs[i]; imgs[i] = imgs[j]; imgs[j] = t;
+    // Order the pool. Composed mode (default) sorts by color so similar hues sit
+    // together and the mosaic reads as color fields; a tight placement (topK=1)
+    // keeps that flow clean. Shuffle mode is the old random arrangement.
+    let imgs;
+    let topK;
+    if (arrange === 'color' && global.Palette) {
+      imgs = global.Palette.compose(images, (it) => (it.img || it)._col, { hueShift: hueShift });
+      topK = 1;
+    } else {
+      // Seeded Fisher–Yates shuffle so the pool order is reproducible too.
+      imgs = images.slice();
+      for (let i = imgs.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        const t = imgs[i]; imgs[i] = imgs[j]; imgs[j] = t;
+      }
+      topK = 5;
     }
 
     let idx = 0;
@@ -163,12 +182,12 @@
 
       const aspect = iw / ih;
       let [chunkW, chunkH] = chunkForAspect(aspect, rnd);
-      let pos = findBestPosition(grid, chunkW, chunkH, rows, cols, rnd);
+      let pos = findBestPosition(grid, chunkW, chunkH, rows, cols, rnd, topK);
 
       if (!pos) {
         const fbs = fallbacksForAspect(aspect);
         for (let f = 0; f < fbs.length; f++) {
-          const p = findBestPosition(grid, fbs[f][0], fbs[f][1], rows, cols, rnd);
+          const p = findBestPosition(grid, fbs[f][0], fbs[f][1], rows, cols, rnd, topK);
           if (p) { chunkW = fbs[f][0]; chunkH = fbs[f][1]; pos = p; break; }
         }
       }
