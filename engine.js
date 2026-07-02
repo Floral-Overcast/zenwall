@@ -91,21 +91,95 @@
     return [[2, 2], [1, 1], [2, 1], [1, 2]];
   }
 
+  // Detect solid black/white bars baked into the source image (letterboxing).
+  // Only strips bars that appear on OPPOSING edges — a single-side bar is
+  // almost always real content (sky, tabletop, negative space). Caps each side
+  // at ~20% so solid-background illustrations (moon on black, subject on white)
+  // pass through untouched. Returns a source rect in original pixel coords.
+  function detectContentRect(img, iw, ih) {
+    const MAX = 64;        // downscale target — plenty for band detection
+    const CAP = 0.22;      // hard cap per side, fraction of dimension
+    const UNIFORM = 10;    // stdev threshold for "uniform" row/col
+    const DARK = 26;       // mean <= this → black bar
+    const LIGHT = 229;     // mean >= this → white bar
+    const full = { sx: 0, sy: 0, sw: iw, sh: ih };
+    const scale = Math.min(1, MAX / Math.max(iw, ih));
+    const w = Math.max(4, Math.round(iw * scale));
+    const h = Math.max(4, Math.round(ih * scale));
+    let data;
+    try {
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const c = cv.getContext('2d', { willReadFrequently: true });
+      // Nearest-neighbor: keeps bar edges crisp so a 3px-in column reads as
+      // pure black/white, not a blended mid-gray that fails the uniform test.
+      c.imageSmoothingEnabled = false;
+      c.drawImage(img, 0, 0, w, h);
+      data = c.getImageData(0, 0, w, h).data;
+    } catch (e) {
+      return full; // tainted canvas (CORS) — leave the image alone
+    }
+
+    function lineStats(fixed, isRow) {
+      const n = isRow ? w : h;
+      let sr = 0, sg = 0, sb = 0;
+      for (let k = 0; k < n; k++) {
+        const i = (isRow ? (fixed * w + k) : (k * w + fixed)) * 4;
+        sr += data[i]; sg += data[i + 1]; sb += data[i + 2];
+      }
+      const mr = sr / n, mg = sg / n, mb = sb / n;
+      let vr = 0, vg = 0, vb = 0;
+      for (let k = 0; k < n; k++) {
+        const i = (isRow ? (fixed * w + k) : (k * w + fixed)) * 4;
+        const dr = data[i] - mr, dg = data[i + 1] - mg, db = data[i + 2] - mb;
+        vr += dr * dr; vg += dg * dg; vb += db * db;
+      }
+      const stdev = Math.sqrt((vr + vg + vb) / (3 * n));
+      return { mean: (mr + mg + mb) / 3, stdev: stdev };
+    }
+    function isBar(s) {
+      return s.stdev <= UNIFORM && (s.mean <= DARK || s.mean >= LIGHT);
+    }
+
+    const capV = Math.floor(h * CAP);
+    const capH = Math.floor(w * CAP);
+    let top = 0, bot = 0, left = 0, right = 0;
+    while (top < capV && isBar(lineStats(top, true))) top++;
+    while (bot < capV && isBar(lineStats(h - 1 - bot, true))) bot++;
+    while (left < capH && isBar(lineStats(left, false))) left++;
+    while (right < capH && isBar(lineStats(w - 1 - right, false))) right++;
+
+    // Require opposing-edge symmetry; otherwise it's content, not a bar.
+    if (top === 0 || bot === 0) { top = 0; bot = 0; }
+    if (left === 0 || right === 0) { left = 0; right = 0; }
+    if (!top && !bot && !left && !right) return full;
+
+    const sx = Math.round((left / w) * iw);
+    const sy = Math.round((top / h) * ih);
+    const sw = Math.max(1, iw - sx - Math.round((right / w) * iw));
+    const sh = Math.max(1, ih - sy - Math.round((bot / h) * ih));
+    return { sx: sx, sy: sy, sw: sw, sh: sh };
+  }
+
   // Draw `img` to cover the rect (x,y,w,h), centre-cropped, clipped to the rect.
-  function drawCover(ctx, img, x, y, w, h, iw, ih) {
+  // `src` is the source-pixel rect to use (letterbox crop or full image).
+  function drawCover(ctx, img, x, y, w, h, src) {
+    const sw = src.sw, sh = src.sh;
     const targetAspect = w / h;
-    const imgAspect = iw / ih;
-    let dw, dh, dx, dy;
-    if (imgAspect > targetAspect) {
-      dh = h; dw = h * imgAspect; dx = x - (dw - w) / 2; dy = y;
+    const srcAspect = sw / sh;
+    let ssx, ssy, ssw, ssh;
+    if (srcAspect > targetAspect) {
+      ssh = sh; ssw = sh * targetAspect;
+      ssx = src.sx + (sw - ssw) / 2; ssy = src.sy;
     } else {
-      dw = w; dh = w / imgAspect; dx = x; dy = y - (dh - h) / 2;
+      ssw = sw; ssh = sw / targetAspect;
+      ssx = src.sx; ssy = src.sy + (sh - ssh) / 2;
     }
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
-    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.drawImage(img, ssx, ssy, ssw, ssh, x, y, w, h);
     ctx.restore();
   }
 
@@ -180,7 +254,10 @@
       const ih = item.naturalHeight || img.naturalHeight;
       if (!iw || !ih) { idx++; continue; }
 
-      const aspect = iw / ih;
+      // Cache the letterbox-crop rect on the img so re-rolls are cheap.
+      if (!img._crop) img._crop = detectContentRect(img, iw, ih);
+      const crop = img._crop;
+      const aspect = crop.sw / crop.sh;
       let [chunkW, chunkH] = chunkForAspect(aspect, rnd);
       let pos = findBestPosition(grid, chunkW, chunkH, rows, cols, rnd, topK);
 
@@ -200,7 +277,7 @@
         const h = chunkH * cellH + (chunkH - 1) * gap;
         const x = col * (cellW + gap);
         const y = row * (cellH + gap);
-        drawCover(ctx, img, x, y, w, h, iw, ih);
+        drawCover(ctx, img, x, y, w, h, crop);
         markOccupied(grid, chunkW, chunkH, row, col);
         freeCells -= chunkW * chunkH;
       } else {

@@ -8,7 +8,9 @@
 #   [WallpaperEngine]::SetWallpaper($path)
 
 $Assemblies = @("System.Drawing", "System.Windows.Forms")
-$DllPath    = Join-Path $PSScriptRoot "WallpaperEngine.dll"
+# v2: adds letterbox / solid-bar detection. Bumping the filename forces a
+# recompile on existing installs without touching the old artifact.
+$DllPath    = Join-Path $PSScriptRoot "WallpaperEngine.v2.dll"
 
 if (Test-Path $DllPath) {
     Add-Type -Path $DllPath
@@ -82,7 +84,8 @@ public class WallpaperEngine {
 
                 try {
                     using (Image img = Image.FromFile(imgPath)) {
-                        float imageAspect = (float)img.Width / img.Height;
+                        Rectangle crop = DetectContentRect(img);
+                        float imageAspect = (float)crop.Width / crop.Height;
 
                         int chunkW, chunkH;
                         if (imageAspect < 0.8f) {
@@ -127,20 +130,28 @@ public class WallpaperEngine {
                             float aspectChunk = (float)w / h;
                             int newW, newH, offsetX, offsetY;
 
+                            // Pick the source sub-rect (from the letterbox-cropped
+                            // region) that covers the destination cell.
+                            float srcSubW, srcSubH, srcSubX, srcSubY;
                             if (imageAspect > aspectChunk) {
-                                newH = h;
-                                newW = (int)(h * imageAspect);
-                                offsetX = outerPadding + col * (cellWidth + innerPadding) - (newW - w) / 2;
-                                offsetY = outerPadding + row * (cellHeight + innerPadding);
+                                srcSubH = crop.Height;
+                                srcSubW = crop.Height * aspectChunk;
+                                srcSubX = crop.X + (crop.Width - srcSubW) / 2f;
+                                srcSubY = crop.Y;
                             } else {
-                                newW = w;
-                                newH = (int)(w / imageAspect);
-                                offsetX = outerPadding + col * (cellWidth + innerPadding);
-                                offsetY = outerPadding + row * (cellHeight + innerPadding) - (newH - h) / 2;
+                                srcSubW = crop.Width;
+                                srcSubH = crop.Width / aspectChunk;
+                                srcSubX = crop.X;
+                                srcSubY = crop.Y + (crop.Height - srcSubH) / 2f;
                             }
+                            offsetX = outerPadding + col * (cellWidth + innerPadding);
+                            offsetY = outerPadding + row * (cellHeight + innerPadding);
+                            newW = w; newH = h;
 
-                            g.SetClip(new Rectangle(outerPadding + col * (cellWidth + innerPadding), outerPadding + row * (cellHeight + innerPadding), w, h));
-                            g.DrawImage(img, offsetX, offsetY, newW, newH);
+                            RectangleF destRect = new RectangleF(offsetX, offsetY, newW, newH);
+                            RectangleF srcRect  = new RectangleF(srcSubX, srcSubY, srcSubW, srcSubH);
+                            g.SetClip(new Rectangle(offsetX, offsetY, w, h));
+                            g.DrawImage(img, destRect, srcRect, GraphicsUnit.Pixel);
                             g.ResetClip();
 
                             MarkOccupied(grid, chunkW, chunkH, row, col);
@@ -151,6 +162,83 @@ public class WallpaperEngine {
         }
         canvas.Save(outputPath, ImageFormat.Png);
         canvas.Dispose();
+    }
+
+    // Detect solid black/white bars baked into a source image (letterboxing).
+    // Only strips bars found on opposing edges; caps each side at ~22% so
+    // solid-background art passes through untouched. Downscales to a 64px
+    // thumbnail first — plenty of resolution to spot a band.
+    private static Rectangle DetectContentRect(Image src) {
+        int iw = src.Width, ih = src.Height;
+        Rectangle full = new Rectangle(0, 0, iw, ih);
+        const int MAX = 64;
+        const float CAP = 0.22f;
+        const double UNIFORM = 10.0;
+        const double DARK = 26.0;
+        const double LIGHT = 229.0;
+        float scale = Math.Min(1f, (float)MAX / Math.Max(iw, ih));
+        int w = Math.Max(4, (int)Math.Round(iw * scale));
+        int h = Math.Max(4, (int)Math.Round(ih * scale));
+
+        byte[] px;
+        int stride;
+        using (Bitmap thumb = new Bitmap(w, h, PixelFormat.Format24bppRgb)) {
+            using (Graphics tg = Graphics.FromImage(thumb)) {
+                // Nearest-neighbor keeps bar edges crisp so a couple pixels in
+                // reads as pure black/white, not a blended mid-gray.
+                tg.InterpolationMode = InterpolationMode.NearestNeighbor;
+                tg.PixelOffsetMode = PixelOffsetMode.Half;
+                tg.DrawImage(src, new Rectangle(0, 0, w, h));
+            }
+            BitmapData bd = thumb.LockBits(new Rectangle(0, 0, w, h),
+                ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            stride = bd.Stride;
+            px = new byte[stride * h];
+            Marshal.Copy(bd.Scan0, px, 0, px.Length);
+            thumb.UnlockBits(bd);
+        }
+
+        // GDI 24bpp is BGR.
+        Func<int, bool, double[]> lineStats = (fixedIdx, isRow) => {
+            int n = isRow ? w : h;
+            double sr = 0, sg = 0, sb = 0;
+            for (int k = 0; k < n; k++) {
+                int y = isRow ? fixedIdx : k;
+                int x = isRow ? k : fixedIdx;
+                int i = y * stride + x * 3;
+                sb += px[i]; sg += px[i + 1]; sr += px[i + 2];
+            }
+            double mr = sr / n, mg = sg / n, mb = sb / n;
+            double vr = 0, vg = 0, vb = 0;
+            for (int k = 0; k < n; k++) {
+                int y = isRow ? fixedIdx : k;
+                int x = isRow ? k : fixedIdx;
+                int i = y * stride + x * 3;
+                double dr = px[i + 2] - mr, dg = px[i + 1] - mg, db = px[i] - mb;
+                vr += dr * dr; vg += dg * dg; vb += db * db;
+            }
+            double stdev = Math.Sqrt((vr + vg + vb) / (3.0 * n));
+            return new double[] { (mr + mg + mb) / 3.0, stdev };
+        };
+        Func<double[], bool> isBar = s => s[1] <= UNIFORM && (s[0] <= DARK || s[0] >= LIGHT);
+
+        int capV = (int)(h * CAP);
+        int capH = (int)(w * CAP);
+        int top = 0, bot = 0, left = 0, right = 0;
+        while (top < capV && isBar(lineStats(top, true))) top++;
+        while (bot < capV && isBar(lineStats(h - 1 - bot, true))) bot++;
+        while (left < capH && isBar(lineStats(left, false))) left++;
+        while (right < capH && isBar(lineStats(w - 1 - right, false))) right++;
+
+        if (top == 0 || bot == 0) { top = 0; bot = 0; }
+        if (left == 0 || right == 0) { left = 0; right = 0; }
+        if (top == 0 && bot == 0 && left == 0 && right == 0) return full;
+
+        int sx = (int)Math.Round((left / (double)w) * iw);
+        int sy = (int)Math.Round((top / (double)h) * ih);
+        int sw = Math.Max(1, iw - sx - (int)Math.Round((right / (double)w) * iw));
+        int sh = Math.Max(1, ih - sy - (int)Math.Round((bot / (double)h) * ih));
+        return new Rectangle(sx, sy, sw, sh);
     }
 
     private static int GetWeightedRandom(int[] weights, Random rnd) {
