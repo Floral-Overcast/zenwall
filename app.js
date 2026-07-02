@@ -176,18 +176,48 @@
   }
 
   function download() {
-    canvas.toBlob(function (blob) {
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = filename(state.seed);
-      a.click();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    }, 'image/png');
+    var countEl = $('download-count');
+    var n = Math.max(1, Math.min(50, parseInt(countEl && countEl.value, 10) || 1));
+    if (n === 1) {
+      canvas.toBlob(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename(state.seed);
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      }, 'image/png');
+      return;
+    }
+    downloadMany(n);
+  }
+
+  function downloadMany(count) {
+    var statusEl = $('pack-status');
+    var i = 0;
+    var prevSig = null;
+    function next() {
+      if (i >= count) {
+        statusEl.textContent = 'Saved ' + count + ' wallpapers to your downloads.';
+        return;
+      }
+      i++;
+      statusEl.textContent = 'Saving ' + i + '/' + count + '…';
+      prevSig = renderPackFrame(i - 1, count, prevSig);
+      canvasToBlob().then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'zenwall-' + String(i).padStart(2, '0') + '.png';
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); next(); }, 250);
+      });
+    }
+    next();
   }
 
   // ── Export: rotation pack (N distinct variants) ──
-  var PACK_COUNT = 12;
+  var PACK_COUNT = 10;
   var PACK_MIN_DISTANCE = 14;  // min mean per-channel diff between consecutive frames
 
   function canvasToBlob() {
@@ -304,8 +334,50 @@
       dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove('is-drag'); });
     });
     dz.addEventListener('drop', function (e) {
-      if (e.dataTransfer && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+      if (!e.dataTransfer) return;
+      var items = e.dataTransfer.items;
+      var hasEntries = items && items.length && typeof items[0].webkitGetAsEntry === 'function';
+      if (hasEntries) {
+        var entries = [];
+        for (var i = 0; i < items.length; i++) {
+          var ent = items[i].webkitGetAsEntry();
+          if (ent) entries.push(ent);
+        }
+        collectEntryFiles(entries).then(function (files) {
+          if (files.length) handleFiles(files);
+          else if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+        });
+      } else if (e.dataTransfer.files.length) {
+        handleFiles(e.dataTransfer.files);
+      }
     });
+
+    function collectEntryFiles(entries) {
+      var out = [];
+      function walk(entry) {
+        return new Promise(function (resolve) {
+          if (entry.isFile) {
+            entry.file(function (f) { out.push(f); resolve(); }, function () { resolve(); });
+          } else if (entry.isDirectory) {
+            var reader = entry.createReader();
+            var all = [];
+            (function readBatch() {
+              reader.readEntries(function (batch) {
+                if (!batch.length) {
+                  Promise.all(all.map(walk)).then(function () { resolve(); });
+                } else {
+                  all = all.concat(batch);
+                  readBatch();
+                }
+              }, function () { resolve(); });
+            })();
+          } else {
+            resolve();
+          }
+        });
+      }
+      return Promise.all(entries.map(walk)).then(function () { return out; });
+    }
 
     // are.na
     $('arena-load').addEventListener('click', function () {

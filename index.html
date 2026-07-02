@@ -56,13 +56,13 @@
           <div class="group-title">Layout</div>
 
           <label class="control">
-            <span class="control-label">Tile density <em id="cols-val">22</em></span>
-            <input type="range" id="cols" min="8" max="34" value="22" />
+            <span class="control-label">Tile density <em id="cols-val">14</em></span>
+            <input type="range" id="cols" min="8" max="34" value="14" />
           </label>
 
           <label class="control">
-            <span class="control-label">Gap <em id="gap-val">6px</em></span>
-            <input type="range" id="gap" min="0" max="24" value="6" />
+            <span class="control-label">Gap <em id="gap-val">8px</em></span>
+            <input type="range" id="gap" min="0" max="24" value="8" />
           </label>
 
           <label class="control">
@@ -113,8 +113,11 @@
 
         <section class="group actions">
           <button class="btn" id="reroll" disabled>↻ Re-roll layout</button>
-          <button class="btn btn-primary" id="download" disabled>Download PNG</button>
-          <button class="btn btn-secondary" id="pack" disabled>Export rotation pack…</button>
+          <div class="download-row">
+            <button class="btn btn-primary" id="download" disabled>Download PNG</button>
+            <input class="download-count" id="download-count" type="number" min="1" max="50" value="1" aria-label="How many variants to download">
+          </div>
+          <button class="btn btn-secondary" id="pack" disabled>Export Pack of 10</button>
           <div class="pack-status" id="pack-status"></div>
         </section>
 
