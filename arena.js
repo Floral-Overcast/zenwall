@@ -11,6 +11,7 @@
   'use strict';
 
   var API = 'https://api.are.na/v3';
+  var SEARCH_API = 'https://api.are.na/v2'; // channel search lives on v2 (v3 has no /search)
   var PER_PAGE = 100;
 
   // Accept a full are.na URL, an API URL, or a bare slug.
@@ -82,5 +83,68 @@
     });
   }
 
-  global.Arena = { fetchChannel: fetchChannel, slugFromInput: slugFromInput };
+  /*
+   * searchChannels(query, opts)
+   *   opts.per  : results per page (default 24)
+   *   opts.page : page number (default 1)
+   * returns Promise<{ channels: [{slug,title,length,author,status,id}], total, totalPages }>
+   * Only public/closed channels come back for anonymous requests; both are readable.
+   */
+  function searchChannels(query, opts) {
+    opts = opts || {};
+    var per = opts.per || 24;
+    var page = opts.page || 1;
+    var q = (query || '').trim();
+    if (!q) return Promise.resolve({ channels: [], total: 0, totalPages: 0 });
+
+    var url = SEARCH_API + '/search/channels?q=' + encodeURIComponent(q) +
+      '&per=' + per + '&page=' + page;
+    return fetch(url).then(function (res) {
+      if (!res.ok) throw new Error('are.na search returned ' + res.status + '.');
+      return res.json();
+    }).then(function (data) {
+      var channels = (data.channels || []).map(function (c) {
+        return {
+          slug: c.slug,
+          title: c.title || c.slug,
+          length: c.length || 0,                               // block count
+          author: (c.user && c.user.full_name) || c.owner_slug || '',
+          status: c.status,                                    // 'public' | 'closed'
+          id: c.id
+        };
+      }).filter(function (c) { return c.slug && c.length > 0; }); // drop empty channels
+      return {
+        channels: channels,
+        total: data.length || channels.length,
+        totalPages: data.total_pages || 1
+      };
+    });
+  }
+
+  /*
+   * channelCover(slug) → Promise<string|null>
+   * The first image URL in a channel, for a preview thumbnail. Uses the 400px
+   * "small" variant to stay light. Never rejects — returns null on any miss.
+   */
+  function channelCover(slug) {
+    var url = API + '/channels/' + encodeURIComponent(slug) + '/contents?per=8';
+    return fetch(url).then(function (res) {
+      return res.ok ? res.json() : null;
+    }).then(function (data) {
+      if (!data) return null;
+      var blocks = data.contents || data.data || [];
+      for (var i = 0; i < blocks.length; i++) {
+        var img = blocks[i].image;
+        if (img) return (img.small && img.small.src) || (img.square && img.square.src) || img.src || null;
+      }
+      return null;
+    }).catch(function () { return null; });
+  }
+
+  global.Arena = {
+    fetchChannel: fetchChannel,
+    slugFromInput: slugFromInput,
+    searchChannels: searchChannels,
+    channelCover: channelCover
+  };
 })(window);

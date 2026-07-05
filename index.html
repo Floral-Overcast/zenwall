@@ -39,14 +39,31 @@
           </div>
 
           <div class="tabpanel is-hidden" id="panel-arena">
-            <input type="text" id="arena-url" class="text-input"
-                   placeholder="are.na channel URL or slug" autocomplete="off" spellcheck="false" />
-            <button class="btn btn-secondary" id="arena-load">Load channel</button>
-            <div class="examples">
-              Try:
-              <button class="chip" data-arena="arena-influences">arena-influences</button>
-              <button class="chip" data-arena="gradients">gradients</button>
+            <div class="arena-search">
+              <input type="text" id="arena-search" class="text-input"
+                     placeholder="Search are.na channels…" autocomplete="off" spellcheck="false" />
+              <button class="btn btn-secondary" id="arena-search-btn">Search</button>
             </div>
+            <div class="arena-suggest">
+              Try
+              <button class="chip" data-q="gradients">gradients</button>
+              <button class="chip" data-q="textures">textures</button>
+              <button class="chip" data-q="brutalism">brutalism</button>
+            </div>
+
+            <div class="arena-results" id="arena-results" aria-live="polite"></div>
+
+            <details class="arena-direct">
+              <summary>or paste a channel link</summary>
+              <input type="text" id="arena-url" class="text-input"
+                     placeholder="are.na channel URL or slug" autocomplete="off" spellcheck="false" />
+              <button class="btn btn-secondary" id="arena-load">Load channel</button>
+              <div class="examples">
+                Try:
+                <button class="chip" data-arena="arena-influences">arena-influences</button>
+                <button class="chip" data-arena="gradients">gradients</button>
+              </div>
+            </details>
           </div>
 
           <div class="source-status" id="source-status">No images loaded yet.</div>

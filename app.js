@@ -169,6 +169,102 @@
     });
   }
 
+  // ── Source: are.na search ──
+  var coverObserver = null;  // lazy-loads result covers as they scroll into view
+
+  // Query are.na for channels so you can find a collection without leaving the tool.
+  function searchArena() {
+    var q = $('arena-search').value.trim();
+    if (!q) return;
+    var status = $('source-status');
+    var box = $('arena-results');
+    box.innerHTML = '';
+    status.textContent = 'Searching are.na for “' + q + '”…';
+    status.className = 'source-status';
+    Arena.searchChannels(q, { per: 24 }).then(function (r) {
+      if (!r.channels.length) {
+        status.textContent = 'No channels found for “' + q + '”. Try another word.';
+        return;
+      }
+      status.textContent = r.channels.length + ' channel' + (r.channels.length === 1 ? '' : 's') +
+        ' — pick one to load.';
+      renderResults(r.channels);
+    }).catch(function (err) {
+      status.textContent = err.message || 'are.na search failed.';
+      status.className = 'source-status is-error';
+    });
+  }
+
+  // Build the result grid. Each card loads the channel on click; cover thumbs
+  // fill in lazily (a miss just leaves the letter placeholder — the card still works).
+  function renderResults(channels) {
+    var box = $('arena-results');
+    box.innerHTML = '';
+    if (coverObserver) coverObserver.disconnect();
+    coverObserver = ('IntersectionObserver' in window)
+      ? new IntersectionObserver(function (entries, obs) {
+          entries.forEach(function (e) {
+            if (!e.isIntersecting) return;
+            obs.unobserve(e.target);
+            loadCover(e.target, e.target.dataset.slug);
+          });
+        }, { root: box, rootMargin: '150px' })
+      : null;
+    channels.forEach(function (ch) {
+      var card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'channel-card';
+      card.title = ch.title + (ch.author ? ' — by ' + ch.author : '');
+
+      var thumb = document.createElement('div');
+      thumb.className = 'channel-thumb';
+      var ph = document.createElement('span');
+      ph.className = 'ph';
+      ph.textContent = (ch.title || '?').trim().charAt(0) || '?';
+      thumb.appendChild(ph);
+
+      var info = document.createElement('div');
+      info.className = 'channel-info';
+      var name = document.createElement('p');
+      name.className = 'channel-name';
+      name.textContent = ch.title;
+      var meta = document.createElement('div');
+      meta.className = 'channel-meta';
+      meta.textContent = (ch.author ? 'by ' + ch.author + ' · ' : '') +
+        ch.length + ' block' + (ch.length === 1 ? '' : 's');
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      card.appendChild(thumb);
+      card.appendChild(info);
+      card.addEventListener('click', function () {
+        if ($('arena-url')) $('arena-url').value = ch.slug;
+        loadArena(ch.slug);
+      });
+      box.appendChild(card);
+
+      // Defer the cover fetch until the card scrolls into view, so a search
+      // fires only a handful of are.na requests at once instead of one per
+      // result up front (which tripped are.na's rate limit / 429s).
+      thumb.dataset.slug = ch.slug;
+      if (coverObserver) coverObserver.observe(thumb);
+      else loadCover(thumb, ch.slug);
+    });
+  }
+
+  // Fetch a channel's cover and swap it in only once it has actually loaded
+  // (leaving the letter placeholder on any miss). Plain <img>, no CORS (never
+  // drawn to canvas); no loading="lazy" (a detached lazy img never loads).
+  function loadCover(thumb, slug) {
+    Arena.channelCover(slug).then(function (src) {
+      if (!src) return;
+      var img = new Image();
+      img.alt = '';
+      img.onload = function () { thumb.textContent = ''; thumb.appendChild(img); };
+      img.src = src;
+    });
+  }
+
   // ── Export: single PNG ──
   function filename(seed) {
     var base = (state.label || 'zenwall').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
@@ -395,7 +491,19 @@
       return Promise.all(entries.map(walk)).then(function () { return out; });
     }
 
-    // are.na
+    // are.na — search
+    $('arena-search-btn').addEventListener('click', searchArena);
+    $('arena-search').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') searchArena();
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.arena-suggest .chip'), function (c) {
+      c.addEventListener('click', function () {
+        $('arena-search').value = c.getAttribute('data-q');
+        searchArena();
+      });
+    });
+
+    // are.na — direct load by URL/slug
     $('arena-load').addEventListener('click', function () {
       var v = $('arena-url').value.trim();
       if (v) loadArena(v);
@@ -403,7 +511,7 @@
     $('arena-url').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') $('arena-load').click();
     });
-    Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (c) {
+    Array.prototype.forEach.call(document.querySelectorAll('.examples .chip'), function (c) {
       c.addEventListener('click', function () {
         $('arena-url').value = c.getAttribute('data-arena');
         loadArena(c.getAttribute('data-arena'));
